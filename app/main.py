@@ -84,3 +84,19 @@ def get_by_code(stateCode: str = Query(..., min_length=1)):
 def get_by_name(stateName: str = Query(..., min_length=1)):
     return query_states("SELECT * FROM dbo.StateInfo WHERE StateName = :stateName",
                         {"stateName": stateName})
+
+
+@app.get("/info", tags=["Information"])
+async def get_info():
+    return {
+        "name": "StateInfo WebAPI",
+        "description": (
+            "StateInfo WebAPI is a RESTful service built using "
+            "Python and FastAPI. It provides access to "
+            "information about U.S. states through HTTP endpoints. "
+            "The API is designed to be lightweight, scalable, "
+            "and easy to integrate with other applications."
+        ),
+        "version": "1.0.0",
+        "status": "active"
+    }
