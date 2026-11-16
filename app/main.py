@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
+import struct
+
+from azure.identity import DefaultAzureCredential
 from fastapi import FastAPI, HTTPException, Query
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
@@ -37,6 +40,17 @@ engine = create_engine(
     f"mssql+pyodbc:///?odbc_connect={quote_plus(connection_string)}",
     pool_pre_ping=True,
 )
+credential = DefaultAzureCredential()
+
+
+@event.listens_for(engine, "do_connect")
+def add_access_token(dialect, conn_record, cargs, cparams):
+    token = credential.get_token("https://database.windows.net/.default").token
+    token_bytes = token.encode("utf-16-le")
+    cparams["attrs_before"] = {
+        1256: struct.pack("=i", len(token_bytes)) + token_bytes
+    }
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
