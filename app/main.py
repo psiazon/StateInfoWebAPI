@@ -109,7 +109,7 @@ async def get_info():
             "Python and FastAPI. It provides access to "
             "information about U.S. states through HTTP endpoints. "
             "The API is designed to be lightweight, scalable, "
-            "and easy to integrate with other applications."
+            "and easy to integrate with other applications. This will be hosted on an MCP Server."
         ),
         "version": "1.0.0",
         "status": "active"
