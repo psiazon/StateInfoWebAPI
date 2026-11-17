@@ -62,6 +62,8 @@ jobs:
       # 6. Install kubelogin for Entra ID
       - name: Install kubelogin
         uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: 'v0.2.12'
 
       # 7. Connect to AKS
       - name: Get AKS Credentials
