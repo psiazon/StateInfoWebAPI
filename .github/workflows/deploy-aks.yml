@@ -1,0 +1,129 @@
+
+name: StateInfo API - Build and Deploy to AKS
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ACR_NAME: stateinfoacr12345
+  IMAGE_NAME: stateinfo-api
+  AKS_CLUSTER: aks-stateinfo-dev
+  DEPLOYMENT_NAME: stateinfo-api
+  K8S_NAMESPACE: default
+  API_BASE_URL: http://4.249.235.43
+
+jobs:
+  build-and-deploy:
+    name: Build Docker and Deploy AKS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # 1. Get the latest main branch
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # 2. Verify Dockerfile
+      - name: Verify build files
+        run: |
+          test -f Dockerfile
+          test -f requirements.txt
+          test -f app/main.py
+
+      # 3. Authenticate to Azure using OIDC
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # 4. Build and push Docker image to ACR
+      - name: Build and Push Docker Image
+        run: |
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "$IMAGE_NAME:${GITHUB_SHA}" \
+            --file Dockerfile \
+            .
+
+      # 5. Install kubectl
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      # 6. Install kubelogin for Entra ID
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+
+      # 7. Connect to AKS
+      - name: Get AKS Credentials
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ vars.AKS_RESOURCE_GROUP }}" \
+            --name "$AKS_CLUSTER" \
+            --overwrite-existing
+
+          kubelogin convert-kubeconfig -l azurecli
+
+      # 8. Update Kubernetes deployment image
+      - name: Deploy New Docker Image
+        run: |
+          IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:$GITHUB_SHA"
+
+          echo "Deploying image: $IMAGE"
+
+          kubectl set image \
+            deployment/"$DEPLOYMENT_NAME" \
+            "$IMAGE_NAME=$IMAGE" \
+            --namespace "$K8S_NAMESPACE"
+
+      # 9. Wait for Kubernetes rolling update
+      - name: Verify Deployment Rollout
+        run: |
+          kubectl rollout status \
+            deployment/"$DEPLOYMENT_NAME" \
+            --namespace "$K8S_NAMESPACE" \
+            --timeout=300s
+
+      # 10. Verify Kubernetes Pod status
+      - name: Verify Kubernetes Pods
+        run: |
+          kubectl get pods \
+            --namespace "$K8S_NAMESPACE" \
+            -l app=stateinfo-api
+
+      # 11. Test FastAPI health endpoint
+      - name: Test GET /health
+        run: |
+          curl --fail --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --max-time 15 \
+            "$API_BASE_URL/health"
+
+      # 12. Test FastAPI info endpoint
+      - name: Test GET /info
+        run: |
+          curl --fail --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --max-time 15 \
+            "$API_BASE_URL/info"
+
+      # 13. Show deployed image
+      - name: Show Deployment Image
+        run: |
+          kubectl get deployment "$DEPLOYMENT_NAME" \
+            --namespace "$K8S_NAMESPACE" \
+            -o jsonpath='{.spec.template.spec.containers[*].image}'
+
+          echo
+          echo "Deployment completed successfully."
