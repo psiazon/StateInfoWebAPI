@@ -1,29 +1,58 @@
-from contextlib import asynccontextmanager
-import struct
 
-from azure.identity import DefaultAzureCredential
-from fastapi import FastAPI, HTTPException, Query
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.engine import URL
-from sqlalchemy.exc import SQLAlchemyError
-from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 import os
 import logging
 
-from urllib.parse import quote_plus
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from fastapi import FastAPI, HTTPException, Query
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import SQLAlchemyError
 
+
+# --------------------------------------------------
+# Logging and environment configuration
+# --------------------------------------------------
 
 load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# --------------------------------------------------
+# SQL Server configuration
+# --------------------------------------------------
 
 server = os.getenv("DB_SERVER")
 database = os.getenv("DB_NAME")
 username = os.getenv("DB_USER")
 password = os.getenv("DB_PASSWORD")
+
+required_vars = {
+    "DB_SERVER": server,
+    "DB_NAME": database,
+    "DB_USER": username,
+    "DB_PASSWORD": password,
+}
+
+missing_vars = [
+    name for name, value in required_vars.items()
+    if not value
+]
+
+if missing_vars:
+    raise RuntimeError(
+        "Missing required environment variables: "
+        + ", ".join(missing_vars)
+    )
+
+
+# --------------------------------------------------
+# SQL Server connection string
+# SQL Server Authentication (UID / PWD)
+# No Azure access token required
+# --------------------------------------------------
 
 connection_string = (
     "DRIVER={ODBC Driver 18 for SQL Server};"
@@ -36,69 +65,148 @@ connection_string = (
     "Connection Timeout=30;"
 )
 
-engine = create_engine(
-    f"mssql+pyodbc:///?odbc_connect={quote_plus(connection_string)}",
-    pool_pre_ping=True,
-)
-credential = DefaultAzureCredential()
 
+# --------------------------------------------------
+# SQLAlchemy engine
+# --------------------------------------------------
 
-@event.listens_for(engine, "do_connect")
-def add_access_token(dialect, conn_record, cargs, cparams):
-    token = credential.get_token("https://database.windows.net/.default").token
-    token_bytes = token.encode("utf-16-le")
-    cparams["attrs_before"] = {
-        1256: struct.pack("=i", len(token_bytes)) + token_bytes
+connection_url = URL.create(
+    "mssql+pyodbc",
+    query={
+        "odbc_connect": connection_string
     }
+)
 
+engine = create_engine(
+    connection_url,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
+
+
+# --------------------------------------------------
+# FastAPI application lifecycle
+# --------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.engine = engine
+
+    logger.info("StateInfo API started")
+
     yield
+
     app.state.engine.dispose()
 
+    logger.info("StateInfo API stopped")
 
-app = FastAPI(title="SWIFBAC StateInfo API", version="1.0.0", lifespan=lifespan)
 
+app = FastAPI(
+    title="SWIFBAC StateInfo API",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+
+# --------------------------------------------------
+# Database query helper
+# --------------------------------------------------
 
 def query_states(sql: str, params: dict | None = None):
     try:
         with app.state.engine.connect() as conn:
-            result = conn.execute(text(sql), params or {})
-            return [dict(row) for row in result.mappings().all()]
+            result = conn.execute(
+                text(sql),
+                params or {}
+            )
+
+            return [
+                dict(row)
+                for row in result.mappings().all()
+            ]
+
     except SQLAlchemyError:
         logger.exception("Database query failed")
-        raise HTTPException(status_code=503, detail="Database query failed")
 
+        raise HTTPException(
+            status_code=503,
+            detail="Database query failed"
+        )
+
+
+# --------------------------------------------------
+# Health endpoint
+# --------------------------------------------------
 
 @app.get("/health", tags=["Health"])
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok"
+    }
 
+
+# --------------------------------------------------
+# State endpoints
+# --------------------------------------------------
 
 @app.get("/api/states/GetAll", tags=["States"])
 def get_all():
-    return query_states("SELECT * FROM dbo.StateInfo")
+    return query_states(
+        "SELECT * FROM dbo.StateInfo"
+    )
 
 
 @app.get("/api/states/GetAllByPopulation", tags=["States"])
-def get_all_by_population(populationCount: int = Query(..., ge=0)):
-    return query_states("SELECT * FROM dbo.StateInfo WHERE Population >= :populationCount",
-                        {"populationCount": populationCount})
+def get_all_by_population(
+    populationCount: int = Query(..., ge=0)
+):
+    return query_states(
+        """
+        SELECT *
+        FROM dbo.StateInfo
+        WHERE Population >= :populationCount
+        """,
+        {
+            "populationCount": populationCount
+        }
+    )
 
 
 @app.get("/api/states/GetByCode", tags=["States"])
-def get_by_code(stateCode: str = Query(..., min_length=1)):
-    return query_states("SELECT * FROM dbo.StateInfo WHERE StateCode = :stateCode",
-                        {"stateCode": stateCode})
+def get_by_code(
+    stateCode: str = Query(..., min_length=1)
+):
+    return query_states(
+        """
+        SELECT *
+        FROM dbo.StateInfo
+        WHERE StateCode = :stateCode
+        """,
+        {
+            "stateCode": stateCode
+        }
+    )
 
 
 @app.get("/api/states/GetByName", tags=["States"])
-def get_by_name(stateName: str = Query(..., min_length=1)):
-    return query_states("SELECT * FROM dbo.StateInfo WHERE StateName = :stateName",
-                        {"stateName": stateName})
+def get_by_name(
+    stateName: str = Query(..., min_length=1)
+):
+    return query_states(
+        """
+        SELECT *
+        FROM dbo.StateInfo
+        WHERE StateName = :stateName
+        """,
+        {
+            "stateName": stateName
+        }
+    )
 
+
+# --------------------------------------------------
+# API information endpoint
+# --------------------------------------------------
 
 @app.get("/info", tags=["Information"])
 async def get_info():
@@ -109,7 +217,8 @@ async def get_info():
             "Python and FastAPI. It provides access to "
             "information about U.S. states through HTTP endpoints. "
             "The API is designed to be lightweight, scalable, "
-            "and easy to integrate with other applications. This will be hosted on an MCP Server."
+            "and easy to integrate with other applications. "
+            "This will be hosted on an MCP Server."
         ),
         "version": "1.0.0",
         "status": "active"
