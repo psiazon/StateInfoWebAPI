@@ -218,7 +218,7 @@ async def get_info():
             "information about U.S. states through HTTP endpoints. "
             "The API is designed to be lightweight, scalable, "
             "and easy to integrate with other applications. "
-            "This will be hosted on an MCP Server."
+            "This will be hosted on an MCP Server. CI/CD test."
         ),
         "version": "1.0.0",
         "status": "active"
